@@ -48,6 +48,10 @@ Visualization Manager:
       Enabled: true
       Value: true
       Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
         Value: /map
       Alpha: 0.7
       Color Scheme: map
@@ -58,6 +62,10 @@ Visualization Manager:
       Enabled: true
       Value: true
       Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
         Value: /local_costmap/costmap
       Alpha: 0.4
       Color Scheme: costmap
@@ -67,6 +75,10 @@ Visualization Manager:
       Enabled: false
       Value: false
       Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
         Value: /global_costmap/costmap
       Alpha: 0.4
       Color Scheme: costmap
@@ -94,6 +106,18 @@ Visualization Manager:
       Line Style:
         Value: Lines
         Line Width: 0.03
+
+    - Class: rviz_default_plugins/Path
+      Name: Coverage Path
+      Enabled: true
+      Value: true
+      Topic:
+        Value: /coverage_path
+      Color: 0; 255; 255
+      Alpha: 1.0
+      Line Style:
+        Value: Lines
+        Line Width: 0.05
 
     - Class: rviz_default_plugins/Marker
       Name: Coverage Markers
@@ -128,7 +152,7 @@ Visualization Manager:
       Topic:
         Value: /goal_pose
     - Class: rviz_default_plugins/PublishPoint
-      Single click: true
+      Single click: false
       Topic:
         Value: /clicked_point
   Value: true
