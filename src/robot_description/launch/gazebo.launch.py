@@ -46,7 +46,7 @@ def generate_launch_description():
     declare_y = DeclareLaunchArgument('y_pose', default_value='0.0')
     declare_z = DeclareLaunchArgument('z_pose', default_value='0.0')
 
-    # ---- Gazebo Simulator ----
+    # Gazebo Simulator
     gz_sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(ros_gz_sim_share, 'launch', 'gz_sim.launch.py')
@@ -57,7 +57,7 @@ def generate_launch_description():
         }.items(),
     )
 
-    # ---- Robot State Publisher ----
+    # Robot State Publisher
     robot_state_publisher = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
@@ -68,7 +68,7 @@ def generate_launch_description():
         }],
     )
 
-    # ---- Spawn Robot in Gazebo ----
+    # Spawn Robot in Gazebo
     spawn_robot = Node(
         package='ros_gz_sim',
         executable='create',
@@ -82,7 +82,7 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ---- ROS-Gazebo Bridge ----
+    #  ROS-Gazebo Bridge 
     # Bridge Gazebo topics to ROS2 topics
     gz_bridge = Node(
         package='ros_gz_bridge',

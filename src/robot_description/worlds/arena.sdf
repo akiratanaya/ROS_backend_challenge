@@ -61,7 +61,7 @@
       </link>
     </model>
 
-    <!-- ==================== ARENA (10m x 10m with walls) ==================== -->
+    <!-- ARENA (10m x 10m with walls) -->
 
     <!-- Arena Floor (visual indicator, slightly different color from ground) -->
     <model name="arena_floor">
@@ -189,7 +189,7 @@
       </link>
     </model>
 
-    <!-- ==================== OBSTACLES (3 static cylinders, 0.5m diameter) ==================== -->
+    <!-- OBSTACLES (3 static cylinders, 0.5m diameter) -->
 
     <!-- Obstacle 1 -->
     <model name="obstacle_1">

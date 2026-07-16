@@ -1,8 +1,9 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, TimerAction
-from launch.substitutions import LaunchConfiguration
+from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
 
@@ -13,11 +14,20 @@ def generate_launch_description():
     rviz_config = os.path.join(pkg_share, 'rviz', 'slam.rviz')
 
     use_sim_time = LaunchConfiguration('use_sim_time', default='true')
+    mapping_mode = LaunchConfiguration('mapping_mode', default='slam')
+
+    slam_mode = IfCondition(PythonExpression(["'", mapping_mode, "' == 'slam'"]))
+    simple_mode = IfCondition(PythonExpression(["'", mapping_mode, "' == 'simple'"]))
 
     declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time',
         default_value='true',
         description='Use simulation (Gazebo) clock if true'
+    )
+    declare_mapping_mode = DeclareLaunchArgument(
+        'mapping_mode',
+        default_value='slam',
+        description='Mapping mode to use: slam or simple'
     )
 
     # ---- SLAM Toolbox (Lifecycle Node in Jazzy) ----
@@ -26,6 +36,7 @@ def generate_launch_description():
         executable='async_slam_toolbox_node',
         name='slam_toolbox',
         output='screen',
+        condition=slam_mode,
         parameters=[
             slam_config,
             {'use_sim_time': True},
@@ -42,11 +53,24 @@ def generate_launch_description():
         executable='lifecycle_manager',
         name='lifecycle_manager_slam',
         output='screen',
+        condition=slam_mode,
         parameters=[{
             'use_sim_time': True,
             'autostart': True,
             'node_names': ['slam_toolbox'],
             'bond_timeout': 0.0,  # Disable bond for standalone SLAM
+        }],
+    )
+
+    # ---- Simple Mapper ----
+    simple_mapper_node = Node(
+        package='coverage_planner',
+        executable='simple_mapper',
+        name='simple_mapper',
+        output='screen',
+        condition=simple_mode,
+        parameters=[{
+            'use_sim_time': True,
         }],
     )
 
@@ -79,8 +103,10 @@ def generate_launch_description():
 
     return LaunchDescription([
         declare_use_sim_time,
+        declare_mapping_mode,
         slam_toolbox_node,
         lifecycle_manager,
+        simple_mapper_node,
         teleop_node,
         rviz_node,
     ])

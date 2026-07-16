@@ -166,8 +166,7 @@ class BoustrophedonPlanner(Node):
         self.get_logger().info("  'clear'         - Clear all areas")
         self.get_logger().info("  'cancel'        - Cancel current execution")
 
-    # ─── CALLBACKS ────────────────────────────────────────────────
-
+    # CALLBACKS 
     def clicked_point_cb(self, msg):
         """Receive clicked points from RViz Publish Point tool."""
         x, y = msg.point.x, msg.point.y

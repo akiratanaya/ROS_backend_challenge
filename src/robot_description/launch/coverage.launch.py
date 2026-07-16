@@ -8,22 +8,23 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    """
-    Launch file for area coverage (Task 3).
+    # 
+    # Launch file for area coverage (Task 3).
 
-    This version uses DIRECT cmd_vel control (bypassing Nav2 bt_navigator)
-    because Nav2's lifecycle manager fails to fully activate in this environment.
+    # This version uses DIRECT cmd_vel control (bypassing Nav2 bt_navigator)
+    # because Nav2's lifecycle manager fails to fully activate in this environment.
 
-    It still launches Nav2 for map_server (to load the map) and costmaps,
-    but the robot is driven directly by the boustrophedon_planner via /cmd_vel.
+    # It still launches Nav2 for map_server (to load the map) and costmaps,
+    # but the robot is driven directly by the boustrophedon_planner via /cmd_vel.
 
-    Prerequisites:
-      1. Gazebo must be running (gazebo.launch.py)
-      2. A saved map must exist from SLAM (Task 2)
+    # Prerequisites:
+    #   1. Gazebo must be running (gazebo.launch.py)
+    #   2. A saved map must exist from SLAM (Task 2)
 
-    Usage:
-      ros2 launch robot_description coverage.launch.py map:=/path/to/map.yaml
-    """
+    # Usage:
+    #   ros2 launch robot_description coverage.launch.py map:=/path/to/map.yaml
+    # 
+    
     pkg_share = get_package_share_directory('robot_description')
 
     nav2_params_file = os.path.join(pkg_share, 'config', 'nav2_params.yaml')
