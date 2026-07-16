@@ -1,31 +1,30 @@
 # Autonomous Mobile Robot System (ROS 2 Jazzy + Gazebo Harmonic)
 
-## 📌 Project Overview
+## Project Overview
 This project is an autonomous mobile robot system developed as part of the Robotics Case Study Submission. The system is built using **ROS 2 Jazzy Jalisco** and simulated within **Gazebo Harmonic**. 
 
 The project addresses three main tasks:
 1. **Robot and Simulation Setup:** A custom URDF robot model (inspired by Turtlebot3 dimensions) spawned inside a custom 10x10 meter Gazebo arena with 3 static obstacle cylinders.
-2. **SLAM and Map Building:** A custom 2D Occupancy Grid Mapper that robustly generates arena maps from LiDAR and Odometry data via teleoperation.
-3. **Area Coverage System:** A Boustrophedon path planner that takes arbitrary user-defined polygon areas via RViz2, computes a zigzag coverage path while excluding obstacles, and navigates the robot through the path using Nav2 Action Clients.
+2. **SLAM and Map Building:** Mapping the arena using `slam_toolbox` and saving it as a 2D occupancy grid, optimized for ROS 2 Jazzy containerized environments.
+3. **Area Coverage System:** A Boustrophedon path planner that takes arbitrary user-defined polygon areas via RViz2, computes a zigzag coverage path, and navigates the robot through the path autonomously using a custom direct P-controller (bypassing Nav2 lifecycle instabilities).
 
 ---
 
-## 🏗️ The System Architecture
+## The System Architecture
 The system follows a modular architecture divided into two primary packages:
 
 1. **`robot_description`**: 
    - Contains the custom URDF/Xacro model, physical properties, and sensor plugin definitions (GPU LiDAR, IMU, Diff Drive).
    - Contains the `arena.sdf` world definition for Gazebo Harmonic.
    - Handles the `ros_gz_bridge` configurations to sync simulation clocks, TF trees, and sensor data to the ROS 2 ecosystem.
-   - Includes custom launch files for Gazebo and RViz visualizations.
+   - Includes custom launch files for Gazebo, SLAM (using `nav2_lifecycle_manager`), and RViz visualizations.
 
 2. **`coverage_planner`**:
-   - **`simple_mapper`**: A custom python-based node that subscribes to `/scan` and TF to mathematically build a 2D occupancy grid (`/map`). This bypasses limitations found with `slam_toolbox` in containerized (Distrobox) environments.
-   - **`boustrophedon_planner`**: The core logic node. It listens for `PointStamped` inputs from RViz2, forms a polygon, calculates optimal sweeping lines, filters out known obstacles via the global costmap, and issues navigation commands to `nav2_bringup`.
+   - **`boustrophedon_planner`**: The core logic node. It listens for `PointStamped` inputs from RViz2, forms a polygon, and calculates optimal sweeping lines. It features a robust **direct control system** that calculates distance/heading errors via `/odom` and publishes directly to `/cmd_vel`. This architectural decision was made to ensure 100% reliability against ROS 2 Jazzy's `bt_navigator` action server timeout bugs.
 
 ---
 
-## ⚙️ How to Setup
+## How to Setup
 
 ### Prerequisites
 - **Ubuntu 24.04** (or Ubuntu 22.04 inside Distrobox/Docker)
@@ -60,7 +59,7 @@ The system follows a modular architecture divided into two primary packages:
 
 ---
 
-## 🚀 How to Use & Configuration Guide
+## How to Use & Configuration Guide
 
 ### Task 1 & 2: Simulation and SLAM Mapping
 To start mapping the 10x10 arena:
@@ -71,9 +70,8 @@ To start mapping the 10x10 arena:
    source install/setup.bash
    ros2 launch robot_description gazebo.launch.py
    ```
-   *Note for Container/Distrobox users:* If you experience LiDAR rendering issues due to lack of direct GPU access, the launch file uses software rendering fallback (`LIBGL_ALWAYS_SOFTWARE`) with Ogre1, ensuring the CPU handles raycasting properly.
 
-2. **Launch the Mapper & RViz:**
+2. **Launch SLAM & RViz:**
    Open a second terminal and run:
    ```bash
    source install/setup.bash
@@ -85,36 +83,39 @@ To start mapping the 10x10 arena:
    ```bash
    ros2 run teleop_twist_keyboard teleop_twist_keyboard
    ```
-   Drive the robot around the arena using `i, j, k, l, ,` keys. The custom mapper will instantly draw the walls in RViz2 based on a 12.0m max laser range.
+   Drive the robot around the arena using `i, j, k, l, ,` keys to map the environment.
 
 4. **Save the Map:**
-   Once the arena is fully explored, save the map for the coverage task:
+   Once the arena is fully explored, save the map in `.png` format (to prevent ImageMagick segmentation faults in Jazzy):
    ```bash
-   ros2 run nav2_map_server map_saver_cli -f ~/ros2_ws/src/robot_description/maps/arena_map
+   ros2 run nav2_map_server map_saver_cli -f ~/ros2_ws/src/robot_description/maps/arena_map --fmt png
    ```
 
 ### Task 3: Area Coverage (Boustrophedon)
-*Assuming Nav2 is configured to load the previously saved map.*
+*This task utilizes our custom launch file that brings up Nav2 Costmaps and the Boustrophedon Planner.*
 
-1. **Launch Nav2 and Planner:**
-   Start the standard `nav2_bringup` with your saved map, and then run the coverage node:
+1. **Launch Coverage System:**
+   Start the coverage environment with the saved map:
    ```bash
-   ros2 run coverage_planner boustrophedon_planner
+   ros2 launch robot_description coverage.launch.py map:=/home/akiratanaya/robotics/seleksi_itb_delabo/ros_backend/ROS_backend_challenge/src/robot_description/maps/arena_map.yaml
    ```
 
-2. **Define Coverage Area:**
-   - In RViz2, use the **Publish Point** tool on the top toolbar.
-   - Click at least 3 times on the map to define the vertices of your arbitrary polygonal coverage zone.
-   - The planner will validate the area. If it overlaps with obstacles (costmap threshold), those specific cells are excluded from the coverage path.
+2. **Initialize Robot Pose:**
+   - In RViz, use the **2D Pose Estimate** tool to set the robot's initial starting location (crucial for AMCL localization and Costmap bringup).
 
-3. **Execution:**
-   - The node will compute a zigzag (boustrophedon) trajectory.
-   - It sends `NavigateThroughPoses` action goals to Nav2.
-   - The robot will autonomously sweep the defined area while avoiding the 3 static cylinders.
+3. **Feature A: Direct Goal Navigation:**
+   - You can use the **2D Goal Pose** tool in RViz to click anywhere on the map. The custom planner will seamlessly navigate the robot directly to that point.
+
+4. **Feature B: Boustrophedon Area Coverage:**
+   - Use the **Publish Point** tool in RViz to click 4 times on the map, defining a polygonal coverage zone.
+   - In a separate terminal, finalize the area:
+     ```bash
+     ros2 topic pub --once /coverage_command std_msgs/msg/String "{data: 'finish_area'}"
+     ```
+   - Start the autonomous coverage sweep:
+     ```bash
+     ros2 topic pub --once /coverage_command std_msgs/msg/String "{data: 'start'}"
+     ```
+   - The robot will execute a highly accurate zigzag path across the defined polygon using its internal P-controller.
 
 ---
-
-## 📝 Limitations & Future Improvements
-- **Mapping Robustness:** The current custom mapper assumes perfect odometry and does not perform loop closure or advanced scan matching like Cartographer/SLAM Toolbox. It is highly effective for simulation but would drift in real-world scenarios with wheel slip.
-- **Coverage Sorting:** The current Boustrophedon planner executes sub-regions sequentially. Implementing an optimizer (like TSP or Nearest Neighbor) to sort disjoint areas would make the cleaning/coverage path significantly faster.
-- **Dynamic Obstacles:** The planner currently relies on the static costmap. Future iterations should incorporate the local costmap to dynamically reroute mid-sweep if a moving obstacle appears.
