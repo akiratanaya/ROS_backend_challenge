@@ -13,18 +13,15 @@ import math
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from rclpy.action import ActionClient
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
 from geometry_msgs.msg import (
     Point, Pose, PoseStamped, PointStamped,
-    Polygon, Point32,
+    Polygon, Point32, Twist,
 )
-from nav_msgs.msg import OccupancyGrid, Path
+from nav_msgs.msg import OccupancyGrid, Path, Odometry
 from std_msgs.msg import Header, ColorRGBA, String
 from visualization_msgs.msg import Marker, MarkerArray
-from nav2_msgs.action import NavigateThroughPoses, NavigateToPose
-from action_msgs.msg import GoalStatus
 
 
 class CoverageArea:
@@ -98,6 +95,22 @@ class BoustrophedonPlanner(Node):
         self.occupancy_grid = None      # Latest map
         self.is_executing = False
 
+        # Direct control state
+        self.current_waypoints = []
+        self.current_waypoint_idx = 0
+        self.robot_x = 0.0
+        self.robot_y = 0.0
+        self.robot_yaw = 0.0
+        self.odom_received = False
+
+        # Control parameters
+        self.declare_parameter('linear_speed', 0.22)
+        self.declare_parameter('angular_speed', 1.5)
+        self.declare_parameter('waypoint_tolerance', 0.15)
+        self.linear_speed = self.get_parameter('linear_speed').value
+        self.angular_speed = self.get_parameter('angular_speed').value
+        self.waypoint_tolerance = self.get_parameter('waypoint_tolerance').value
+
         # QoS for map (transient local)
         map_qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
@@ -112,6 +125,12 @@ class BoustrophedonPlanner(Node):
         self.create_subscription(
             OccupancyGrid, '/map', self.map_cb, map_qos
         )
+        self.create_subscription(
+            Odometry, '/odom', self.odom_cb, 10
+        )
+        self.create_subscription(
+            PoseStamped, '/goal_pose', self.goal_pose_cb, 10
+        )
 
         # Publishers
         self.marker_pub = self.create_publisher(
@@ -123,16 +142,17 @@ class BoustrophedonPlanner(Node):
         self.status_pub = self.create_publisher(
             String, '/coverage_status', 10
         )
+        self.cmd_vel_pub = self.create_publisher(
+            Twist, '/cmd_vel', 10
+        )
 
         # Subscribers for commands (using String topic as simple command interface)
         self.create_subscription(
             String, '/coverage_command', self.command_cb, 10
         )
 
-        # Nav2 action client
-        self.nav_client = ActionClient(
-            self, NavigateThroughPoses, 'navigate_through_poses'
-        )
+        # Control timer (10 Hz)
+        self.control_timer = self.create_timer(0.1, self.control_loop)
 
         # Visualization timer
         self.create_timer(1.0, self.publish_markers)
@@ -243,7 +263,7 @@ class BoustrophedonPlanner(Node):
                     gy = int((y - origin_y) / resolution)
                     if 0 <= gx < grid.info.width and 0 <= gy < grid.info.height:
                         cell = grid.data[gy * width + gx]
-                        if cell == 0:  # Free space
+                        if cell <= 0:  # Free space (0) or Unknown (-1)
                             free_count += 1
                 y += step
             x += step
@@ -377,7 +397,7 @@ class BoustrophedonPlanner(Node):
                 gy = gy_c + dy
                 if 0 <= gx < w and 0 <= gy < h:
                     cell = self.occupancy_grid.data[gy * w + gx]
-                    if cell > 50:  # Occupied or unknown
+                    if cell > 50:  # Occupied
                         return False
         return True
 
@@ -433,53 +453,96 @@ class BoustrophedonPlanner(Node):
         # Send to Nav2
         self.execute_coverage(all_waypoints)
 
+    def odom_cb(self, msg):
+        """Update robot position from odometry."""
+        self.robot_x = msg.pose.pose.position.x
+        self.robot_y = msg.pose.pose.position.y
+        # Extract yaw from quaternion
+        q = msg.pose.pose.orientation
+        siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+        cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        self.robot_yaw = math.atan2(siny_cosp, cosy_cosp)
+        self.odom_received = True
+
+    def goal_pose_cb(self, msg):
+        """Handle '2D Goal Pose' from RViz — navigate directly to the goal."""
+        goal_x = msg.pose.position.x
+        goal_y = msg.pose.position.y
+        self.get_logger().info(f"Goal pose received: ({goal_x:.2f}, {goal_y:.2f})")
+
+        # Cancel any ongoing coverage
+        if self.is_executing:
+            self.is_executing = False
+            self.cmd_vel_pub.publish(Twist())
+
+        # Use the same waypoint system with a single goal
+        self.is_executing = True
+        self.current_waypoints = [(goal_x, goal_y)]
+        self.current_waypoint_idx = 0
+        self.publish_status(f"Navigating to goal ({goal_x:.2f}, {goal_y:.2f})...")
+
     def execute_coverage(self, waypoints):
-        """Send waypoints to Nav2 NavigateThroughPoses."""
-        if not self.nav_client.wait_for_server(timeout_sec=5.0):
-            self.publish_status("Nav2 action server not available!")
-            self.get_logger().error("NavigateThroughPoses action server not available")
+        """Start direct cmd_vel coverage execution."""
+        if not self.odom_received:
+            self.publish_status("ERROR: No odometry data received yet! Is Gazebo running?")
             return
 
-        goal = NavigateThroughPoses.Goal()
-        for (x, y) in waypoints:
-            pose = PoseStamped()
-            pose.header.frame_id = self.map_frame
-            pose.header.stamp = self.get_clock().now().to_msg()
-            pose.pose.position.x = x
-            pose.pose.position.y = y
-            pose.pose.position.z = 0.0
-            # Orientation: face direction of travel
-            pose.pose.orientation.w = 1.0
-            goal.poses.append(pose)
-
         self.is_executing = True
-        future = self.nav_client.send_goal_async(
-            goal, feedback_callback=self.nav_feedback_cb
-        )
-        future.add_done_callback(self.nav_goal_response_cb)
+        self.current_waypoints = waypoints
+        self.current_waypoint_idx = 0
+        self.publish_status("Coverage execution started (direct control)...")
+        self.get_logger().info(f"Robot starting at ({self.robot_x:.2f}, {self.robot_y:.2f})")
 
-    def nav_goal_response_cb(self, future):
-        goal_handle = future.result()
-        if not goal_handle.accepted:
-            self.publish_status("Coverage goal rejected by Nav2!")
+    def control_loop(self):
+        """Timer callback: P-controller to drive robot toward current waypoint."""
+        if not self.is_executing or not self.odom_received:
+            return
+
+        if self.current_waypoint_idx >= len(self.current_waypoints):
+            # Stop the robot
+            self.cmd_vel_pub.publish(Twist())
+            self.publish_status("Coverage complete! All waypoints reached.")
             self.is_executing = False
             return
 
-        self.publish_status("Coverage execution started...")
-        result_future = goal_handle.get_result_async()
-        result_future.add_done_callback(self.nav_result_cb)
+        target_x, target_y = self.current_waypoints[self.current_waypoint_idx]
 
-    def nav_feedback_cb(self, feedback_msg):
-        remaining = feedback_msg.feedback.number_of_poses_remaining
-        self.publish_status(f"Covering... {remaining} waypoints remaining")
+        # Distance and angle to target
+        dx = target_x - self.robot_x
+        dy = target_y - self.robot_y
+        distance = math.sqrt(dx * dx + dy * dy)
 
-    def nav_result_cb(self, future):
-        result = future.result()
-        self.is_executing = False
-        if result.status == GoalStatus.STATUS_SUCCEEDED:
-            self.publish_status("Coverage complete!")
+        # Check if waypoint reached
+        if distance < self.waypoint_tolerance:
+            if self.current_waypoint_idx % 10 == 0 or self.current_waypoint_idx == len(self.current_waypoints) - 1:
+                self.publish_status(
+                    f"Waypoint {self.current_waypoint_idx + 1}/{len(self.current_waypoints)} reached"
+                )
+            self.current_waypoint_idx += 1
+            return
+
+        # Angle to target
+        target_yaw = math.atan2(dy, dx)
+        yaw_error = target_yaw - self.robot_yaw
+
+        # Normalize angle to [-pi, pi]
+        while yaw_error > math.pi:
+            yaw_error -= 2.0 * math.pi
+        while yaw_error < -math.pi:
+            yaw_error += 2.0 * math.pi
+
+        cmd = Twist()
+
+        # If heading error is large, rotate in place first
+        if abs(yaw_error) > 0.4:  # ~23 degrees
+            cmd.angular.z = self.angular_speed * (1.0 if yaw_error > 0 else -1.0)
+            cmd.linear.x = 0.0
         else:
-            self.publish_status(f"Coverage ended with status: {result.status}")
+            # Drive forward with proportional angular correction
+            cmd.linear.x = min(self.linear_speed, self.linear_speed * (distance / 0.5))
+            cmd.angular.z = 2.0 * yaw_error  # proportional steering
+
+        self.cmd_vel_pub.publish(cmd)
 
     def cancel_coverage(self):
         """Cancel current coverage execution."""
@@ -488,6 +551,8 @@ class BoustrophedonPlanner(Node):
             return
         self.publish_status("Cancelling coverage...")
         self.is_executing = False
+        # Stop the robot
+        self.cmd_vel_pub.publish(Twist())
 
     # ─── VISUALIZATION ────────────────────────────────────────────
 
